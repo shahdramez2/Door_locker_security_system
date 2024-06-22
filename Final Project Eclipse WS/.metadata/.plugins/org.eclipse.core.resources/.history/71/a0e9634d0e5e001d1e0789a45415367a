@@ -1,0 +1,191 @@
+/*
+ * File: Control_ECU.c
+ * Description: application file of Control_ECU
+ * Author: SHAHD MOHAMED
+ */
+
+#include "Control_header.h"
+#include"uart.h"
+#include"timer1.h"
+#include"dc_motor.h"
+
+/*******************************************************************************
+ *                           Global Variables                                  *
+ *******************************************************************************/
+
+//extern volatile uint8 OpenDoorFlag;
+//extern volatile uint8 CloseDoorFlag;
+//extern volatile uint8 stop_flag;
+extern volatile uint8 stop_buzzer;
+extern volatile uint8 motorState;
+
+/*******************************************************************************
+ *                               CONTROL ECU MAIN                              *
+ *******************************************************************************/
+
+int main()
+{
+
+	/*
+	    UART_Config.baud_rate= 9600;
+		UART_Config.bit_data = EIGHT_BIT_FRAME;
+		UART_Config.parity= DISABLE_PARITY;
+		UART_Config.stop_bit=ONE_STOP_BIT;
+	 */
+	UART_ConfigType config_UART = {EIGHT_BIT_FRAME, DISABLE_PARITY, ONE_STOP_BIT, 9600};
+
+	/*
+     Configure Timer1_Config variables to count 3 seconds in one interrupts from CTC mode
+	g_Timer1Config.initial_value=0;      ----> value counter starts counting from
+	g_Timer1Config.compare_value=46836;  ----> setting value of compare match register of timer1
+	g_Timer1Config.mode=CTC_OCR1A;       ----> configure timer1 to work in compare mode using channel A
+	g_Timer1Config.prescaler= F_CPU_64;  ----> use prescaler of 1024
+	 */
+	Timer1_ConfigType config_Timer1_Motor = {0,46875,F_CPU_64, CTC_OCR1A};
+
+
+	/* Configure Timer1_Config variables to count 1_minute through 7 interrupts from timer1 Normal mode
+		 g_Timer1Config.initial_value=0;      ----> value counter starts counting from
+	     g_Timer1Config.compare_value=58536;  ----> setting value of compare match register of timer1
+		 g_Timer1Config.mode= CTC_OCR1A;      ----> configure timer1 to work in compare mode using channel A
+		 g_Timer1Config.prescaler= F_CPU_1024;----> use prescaler of 1024
+	 */
+	Timer1_ConfigType config_Timer1_Buzzer = {0,58536,F_CPU_1024,CTC_OCR1A};
+
+	/* Configuration of EEPROM:
+	 * 0x33 ---->  address of the slave device.
+	 * FAST_MODE ---> the bit rate
+	 * */
+	TWI_ConfigType g_TWI_Config = {0x33, FAST_MODE};
+
+	uint8 state = SETTING_NEW_PASSWORD;  /* variable to carry which state to controllers are working in*/
+
+	/* variable carrying result of comparing confirm password with new pass when setting new password
+	 * and comparing entered password with one of the system when requesting to open the door or change password
+	 */
+	uint8 check = WRONG_PASS;
+
+	/* variable to count number of consecutive wrong password entered by the user*/
+	uint8 g_enterPassMaxTrials = 0;
+
+	UART_init(&config_UART); /*enable UART driver */
+	TWI_init(&g_TWI_Config); /* enable I2C driver */
+	DcMotor_Init(); /* enable dc_motor driver */
+	Buzzer_init(); /*enable buzzer driver */
+
+	/*Enable general interrupt*/
+	sei();
+
+	while(1)
+	{
+		/* setting a password for the system or user requires changing password*/
+		while((state == SETTING_NEW_PASSWORD) && (check == WRONG_PASS))
+		{
+
+			check = CONTORL_step1SetNewPass();
+		}
+
+		/*
+		 * When HMI_ECU sends READY_TO_COMMUNICATE, CONTROL_ECU will start to receive open the door or change password
+		 * In case of the password is wrong for 3 times --> buzzer will turn on for 1 minute
+		 * */
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		state = UART_receiveByte();
+
+		if(state == STEP_2_OPEN_DOOR)
+		{
+			check = CONTROL_checkPassword();
+
+			if(check == MATCH)
+			{
+				g_enterPassMaxTrials = 0;
+
+				Timer1_setCallBack(CONTROL_motorConrolling);
+				Timer1_init(&config_Timer1_Motor);
+
+
+				//				CONTROL_motorOpen();
+
+				motorState = ROTATE_MOTOR_CW;
+
+				/* make motor rotate CW for another 15 seconds */
+				DcMotor_Rotate(CW, MAX_MOTOR_SPEED);
+				while(motorState == ROTATE_MOTOR_CW);
+
+				//				CloseDoorFlag = 0;
+				//				CONTROL_motorClose();
+
+				/* stop motor after receiving two interrupts */
+				DcMotor_Rotate(STOP, ZERO_SPEED);
+				while(motorState == STOP_MOTOR);
+
+				/* make motor rotate A_CW for another 15 seconds */
+				DcMotor_Rotate(A_CW, MAX_MOTOR_SPEED);
+				while(motorState == ROTATE_MOTOR_A_CW);
+
+				/* stop motor*/
+				DcMotor_Rotate(STOP, ZERO_SPEED);
+
+				//				stop_flag = 0;
+				//				CONTROL_motorStop();
+
+				//				OpenDoorFlag = 0;
+				//				CloseDoorFlag = 0;
+				//				stop_flag = 0;
+
+				Timer1_deInit();
+			}
+			if (check == NOT_MATCHING)
+			{
+				g_enterPassMaxTrials++;
+				if(g_enterPassMaxTrials >= 3)
+				{
+					Timer1_setCallBack(CONTROL_buzzerProcessing);
+					Timer1_init(&config_Timer1_Buzzer);
+
+					Buzzer_on();
+					while(stop_buzzer != 1);
+					Buzzer_off();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+				}
+			}
+		}
+		else if (state == STEP_3_CHANGE_PASS)
+		{
+			check = CONTROL_checkPassword();
+			if(check == MATCH)
+			{
+				g_enterPassMaxTrials = 0;
+				state = SETTING_NEW_PASSWORD;
+				check = WRONG_PASS;
+			}
+			else if (check == NOT_MATCHING)
+			{
+
+				g_enterPassMaxTrials++;
+				if(g_enterPassMaxTrials >= 3)
+				{
+					Timer1_setCallBack(CONTROL_buzzerProcessing);
+					Timer1_init(&config_Timer1_Buzzer);
+
+					Buzzer_on();
+					while(stop_buzzer != 1);
+					Buzzer_off();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+				}
+			}
+		}
+		else
+		{
+			state = SETTING_NEW_PASSWORD;
+			check = WRONG_PASS;
+		}
+	}
+}
+
+
+/*Control ECU*/

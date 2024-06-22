@@ -1,0 +1,131 @@
+/*
+ * File: HMI_header.h
+ * Description: header file for HMI_ECU
+ * Author: Shahd Mohamed
+ */
+
+#ifndef HMI_HEADER_H_
+#define HMI_HEADER_H_
+
+#include "keypad.h"
+#include "lcd.h"
+#include "timer1.h"
+#include "uart.h"
+#include "avr/interrupt.h"
+#include "gpio.h"
+#include<util/delay.h>
+
+/*******************************************************************************
+ *                            Definition                                       *
+ *******************************************************************************/
+
+#define WRONG_PASS                  0
+#define READY_TO_COMMUNICATE        2
+#define SETTING_NEW_PASSWORD        1
+#define STEP_2_OPEN_DOOR            3
+#define STEP_3_CHANGE_PASS          5
+//#define SAVED        6
+#define MATCH                       8
+#define NOT_MATCHING                9
+//#define ALARM        10
+#define NOT_INITIAL  11
+#define TWO_PASSWORDS_ENTERED 12
+
+#define PASSWORD_SIZE     2
+
+#define OPEN_LCD_TIMER_PER_SECOND 450
+#define CLOSE_LCD_TIMER_PER_SECOND 900
+#define CLOSE_BUZZER_TIMER_FOR_ONE_MIN 1860
+
+
+
+/*******************************************************************************
+ *                      Functions Prototypes                                   *
+ *******************************************************************************/
+/*
+ * Description:
+ *	Function to get the new password and send it to control EUC
+ * */
+uint8 HMI_settingNewPassword(void);
+
+#if 0
+/*
+ * Description:
+ *	Function to get the confirmation password and send it to control EUC
+ *	to compare if the two password are matched or not.
+ * */
+uint8 HMI_confirmPass(void);
+#endif
+
+/*
+ * Description:
+ *	  Function to get the password from the user and send it to control EUC
+ * */
+uint8 HMI_getPassword(void);
+
+
+/*
+ * Description:
+ *	  Function that indicate if the entered password and the stored password
+ *	  are matched or not
+ * */
+uint8 HMI_matchPass(void);
+#if 0
+/*
+ * Description:
+ *	  Function to display the main option of the system
+ *	  + : open the door.
+ *	  - : Change password.
+ * */
+void HMI_mainOption(void);
+#endif
+/*
+ * Description:
+ *	  Function to choose from the main options
+ *	  + : open the door.
+ *	  - : Change password.
+ *	  and send it to CONTROL ECU
+ * */
+uint8 HMI_mainOptions(void);
+
+/*
+ * Description:
+ *	  Function to display the state of the door "Door is opening"
+ *	  after choosing from the main option --> open the door for 15 seconds.
+ * */
+void HMI_openDoor(void);
+
+/*
+ * Description:
+ *	  Function to display the state of the door "Door is closing"
+ *	  after choosing from the main option --> open the door for 15 seconds.
+ * */
+void HMI_closeDoor(void);
+
+#if 0
+/*
+ * Description:
+ *	  Function to manage the time of the motor:
+ *	  1- 15 seconds rotates in clockwise direction
+ *	  2- 15 seconds rotates in counter clockwise direction.
+ *	  3- stop motor
+ * */
+void HMI_LCDProcessing(void);
+#endif
+
+#if 0
+/*
+ * Description:
+ *		Function to start display the alarm for 1 minute.
+ * */
+void HMI_step5_error(void);
+#endif
+
+/*
+ * Description:
+ *		Function to display alarm and stop after one minute
+ * */
+void HMI_buzzerProcessing(void);
+
+void Controling_LCD_openDoorState (void);
+#endif /* HMI_HEADER_H_ */

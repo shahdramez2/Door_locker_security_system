@@ -1,0 +1,73 @@
+/*
+ * timer1.c
+ *
+ *  Created on: Nov 1, 2022
+ *      Author: SHAHD MOHAMED
+ */
+
+#include"timer1.h"
+#include<avr/io.h>
+#include<avr/interrupt.h>
+
+/*******************************************************************************
+ *                      Functions Definitions                                  *
+ *******************************************************************************/
+/*
+ * Description:
+ * Function to initialize the Timer driver
+ */
+void Timer1_init(const Timer1_ConfigType * Config_Ptr)
+{
+	/* put initial value of timer1 in TCNT1 */
+	TCNT1 = Config_Ptr->initial_value;
+
+	/* put compare value of timer1 in OCR1A, when working in CTC mode*/
+	if(Config_Ptr->mode == CTC_OCR1A)
+	{
+		OCR1A = Config_Ptr->compare_value;
+	}
+
+	/* Insert first two bits of Timer1_Mode in first two bits in TCCR1A */
+	TCCR1A = ( TCCR1A & 0xFA ) | ( Config_Ptr->mode & 0x03);
+
+	/*Insert bit-3 and bit-2 of Timer1_Mode in bit-4 and bit-3 bit in TCCR1B */
+	TCCR1A = (TCCR1A & 0xE7) | ( (Config_Ptr->mode & 0x0C) <<1);
+
+	/*Insert timer1_prescalar value in first three bits of TCCR1A */
+	TCCR1A = (TCCR1A & 0XF8) | ( Config_Ptr->prescaler & 0x07);
+
+
+
+
+
+
+}
+
+
+/*
+ * Description:
+ * Function to initialize the Timer driver
+ */
+void Timer1_init(const Timer1_ConfigType * Config_Ptr)
+{
+
+}
+
+/*
+ * Description:
+ * Function to disable the Timer driver
+ */
+void Timer1_deInit(void)
+{
+
+}
+
+
+/*
+ * Description:
+ * Function to set the Call Back function address
+ */
+void Timer1_setCallBack(void(*a_ptr)(void))
+{
+
+}

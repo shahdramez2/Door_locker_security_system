@@ -1,0 +1,35 @@
+/*
+ * timer1.h
+ *
+ *  Created on: Nov 1, 2022
+ *      Author: SHAHD MOHAMED
+ */
+
+#ifndef TIMER1_H_
+#define TIMER1_H_
+
+/*******************************************************************************
+ *                      Functions Prototypes                                   *
+ *******************************************************************************/
+
+/*
+ * Description:
+ * Function to initialize the Timer driver
+ */
+void Timer1_init(const Timer1_ConfigType * Config_Ptr);
+
+/*
+ * Description:
+ * Function to disable the Timer driver
+ */
+void Timer1_deInit(void);
+
+
+/*
+ * Description:
+ * Function to set the Call Back function address
+ */
+void Timer1_setCallBack(void(*a_ptr)(void));
+
+
+#endif /* TIMER1_H_ */

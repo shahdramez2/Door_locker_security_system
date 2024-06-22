@@ -1,0 +1,757 @@
+/*
+ * Control_ECU.c
+ *
+ *  Created on: Nov 1, 2022
+ *      Author: SHAHD MOHAMED
+ */
+#if 0
+
+#include"std_types.h"
+#include"gpio.h"
+#include"common_macros.h"
+#include"lcd.h"
+#include"uart.h"
+#include"keypad.h"
+#include"timer1.h"
+#include <util/delay.h>
+#include<avr/io.h>
+
+/*******************************************************************************
+ *                                Definitions                                  *
+ *******************************************************************************/
+#define PASS_DIGITS_NUM                  3  /* num of digits per password */
+
+#define Invalid_PassCreationProcess      0  /* macro sent to HMI_ECU if two passwords don't match*/
+#define valid_PassCreationProcess        1  /* macro sent to HMI_ECU if two passwords match*/
+
+#define STEP_1_CREATE_PASSWORD           1
+#define STEP_2_MAIN_OPTIONS              2
+#define STEP_3_OPEN_DOOR                 3
+#define STEP_4_CHANGE_PASSWORD           4
+#define STEP_5_ACTIVATE_BUZZER           5
+#define NO_STATE                         0
+
+#define RIGHT_PASSWORD                   1
+#define WRONG_PASSWORD                   0
+
+#define CONTROL_ECU_READY                0x10
+
+#define READY_TO_COMMUNICATE                            0x11
+/*******************************************************************************
+ *                         Global Variables                                    *
+ *******************************************************************************/
+
+
+uint8 g_state= STEP_1_CREATE_PASSWORD;
+
+uint8 g_enterPassMaxTrials=0;
+
+Timer1_ConfigType g_Timer1Config; /* object form timer1_config struct */
+
+volatile uint8 OpenDoorFlag=0, CloseDoorFlag=0, BuzzerOnFlag=0;
+
+
+/*******************************************************************************
+ *                        Function Prototypes                                  *
+ *******************************************************************************/
+
+/*
+ * Description:
+ * call back function of timer1, to control LCD while opening and closing the door
+ */
+void Controling_LCD_openDoorState (void);
+
+
+/*
+ * Description:
+ * call back function of timer1, to control LCD when displaying error message and activating
+ * buzzer after password entered was incorrect for 3 consecutive times
+ */
+void Controling_LCD_activateBuzzerState(void);
+
+
+/*******************************************************************************
+ *                       Main Function                                         *
+ *******************************************************************************/
+int main(void)
+{
+	/*array to hold password entered form user */
+	uint8 password[PASS_DIGITS_NUM];
+
+	uint8 enter; /*variable to receive enter from user*/
+
+	/* array to hold the re-entered password when creating new password*/
+	uint8 check_password[PASS_DIGITS_NUM];
+#if 0
+	/* putting # to indicate the end of each string when using UART driver */
+	password[PASS_DIGITS_NUM-2] = '#';
+	check_password[PASS_DIGITS_NUM-2]= '#';
+
+	/* putting # to indicate the end of each string when using UART driver */
+	password[PASS_DIGITS_NUM-2] = '#';
+	check_password[PASS_DIGITS_NUM-2]= '#';
+#endif
+	uint8 index; /* index for looping on the password digits*/
+	uint8 valid_newPass_process; /* variable to determine whether creating new password is successful or not*/
+	uint8 validPassOrNot; /* variable to receive form Control_ECU if entered password was right or wrong*/
+	uint8 key; /*variable to hold key entered from user */
+
+	/* Enable global interrupt flag*/
+	SET_BIT(SREG, PIN7_ID);
+
+	/*Configure UART driver with desired settings */
+	UART_Config.baud_rate= 9600;
+	UART_Config.bit_data = EIGHT_BIT_FRAME;
+	UART_Config.parity= DISABLE_PARITY;
+	UART_Config.stop_bit=ONE_STOP_BIT;
+
+	LCD_init(); /* enable LCD driver */
+	UART_init(&UART_Config); /* enable UART driver*/
+
+	while(1)
+	{
+		switch(g_state)
+		{
+		case STEP_1_CREATE_PASSWORD:
+
+			do
+			{
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendByte(STEP_1_CREATE_PASSWORD);
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0, "plz enter pass:");
+
+				/* move cursor to the second column when getting password */
+				LCD_moveCursor(1,0);
+
+				/* Looping to get password from user */
+				for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+				{
+					password[index]= KEYPAD_getPressedKey(); /* get pressed key from keypad */
+					_delay_ms(500); /* consider pressing a key for half-sec to be one press */
+					if(password[index]==0)
+					{
+						password[index]=-1; /* to not be the same as null*/
+					}
+					LCD_intgerToString(password[index]);
+					//LCD_displayString("*"); /* display * for each number in the password */
+				}
+
+				password[index]='#';
+				index++;
+				password[index]='\0';
+#if 0
+				/* wait in the loop until user pressed enter, take '=' in the 4x4 keypad to be enter button*/
+				while(1)
+				{
+					key=KEYPAD_getPressedKey();
+					_delay_ms(500);
+					if(key == '=')
+					{
+						break; /*break from the loop when pressing enter*/
+					}
+				}
+#endif
+				LCD_clearScreen(); /* clear screen to display new content */
+
+				/* ask the user to enter the same password again */
+				LCD_displayStringRowColumn(0,0, "plz re-enter the");
+				LCD_displayStringRowColumn(1,0,"same pass:");
+
+				/* Looping to get the same password from user */
+				for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+				{
+					check_password[index]= KEYPAD_getPressedKey();
+					_delay_ms(500); /* consider pressing a key for half-sec to be one press */
+					LCD_intgerToString(check_password[index]);/* get pressed key from keypad */
+					//LCD_displayString("*"); /* display * for each number in the password */
+
+				}
+
+				check_password[index]='#';
+				index++;
+				check_password[index]='\0';
+#if 0
+				while(1)
+				{
+					key = KEYPAD_getPressedKey();
+					_delay_ms(500);
+					if(key == '=')
+					{
+						break;
+					}
+				}
+#endif
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0,"SENDING PASSWORD");
+
+
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendString(password);
+
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendString(check_password);
+
+
+				/*receiving from Control_ECU whether creating new password process was successful or not*/
+				UART_sendByte(READY_TO_COMMUNICATE);
+				valid_newPass_process=UART_receiveByte();
+
+				LCD_clearScreen();
+
+			}while (valid_newPass_process == FALSE);
+
+			g_state= STEP_2_MAIN_OPTIONS; /*go to step 2*/
+			break;
+
+		case STEP_2_MAIN_OPTIONS:
+
+			LCD_clearScreen(); /* clear screen to display new messages */
+			LCD_displayStringRowColumn(0,0, "+ : Open Door");
+			LCD_displayStringRowColumn(1,0, "- : Change Pass");
+			while(1)
+			{
+				/*get pressed key */
+				key= KEYPAD_getPressedKey();
+				_delay_ms(500);
+
+				/* if user presses +, go to step 3*/
+				if(key == '+')
+				{
+					g_state= STEP_3_OPEN_DOOR;
+					break;
+				}
+				/* if user presses -, go to step4 */
+				else if(key == '-')
+				{
+					g_state= STEP_4_CHANGE_PASSWORD;
+					break;
+				}
+			}
+			break;
+
+		case STEP_3_OPEN_DOOR:
+
+			do
+			{
+				/* informing Control_ECU the current step (step_3_open door)*/
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendByte(STEP_3_OPEN_DOOR);
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0, "plz enter pass:");
+
+				LCD_moveCursor(1,0);
+
+				/* Looping to get password from user */
+				for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+				{
+					password[index]= KEYPAD_getPressedKey(); /* get pressed key from keypad */
+					_delay_ms(500); /* consider pressing a key for half-sec to be one press */
+					LCD_intgerToString(password[index]);/* get pressed key from keypad */
+					//LCD_displayString("*"); /* display * for each number in the password */
+				}
+
+#if 0
+				while(1)
+				{
+					key = KEYPAD_getPressedKey();
+					_delay_ms(500);
+					if(key == '=')
+					{
+						break;
+					}
+				}
+#endif
+
+				password[index]='#';
+				index++;
+				password[index]='\0';
+
+
+				/*send password to Control_ECU to check it*/
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendString(password);
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0, "receiving data");
+
+				/*check from Control_ECU if entered password is valid or not */
+				while(UART_receiveByte != READY_TO_COMMUNICATE);
+				UART_sendByte(READY_TO_COMMUNICATE);
+				validPassOrNot= UART_receiveByte();
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0, "receiving data");
+
+				if(validPassOrNot == RIGHT_PASSWORD)
+				{
+					g_enterPassMaxTrials=0;
+
+					/*set call back function of timer1 */
+					Timer1_setCallBack(Controling_LCD_openDoorState);
+
+					/* Configure Timer1_Config variables to count 15 seconds in two interrupts form CTC mode */
+					g_Timer1Config.initial_value=0;
+					g_Timer1Config.compare_value=46836;
+					g_Timer1Config.mode=CTC_OCR1A;
+					g_Timer1Config.prescaler= F_CPU_1024;
+
+					/* start timer1 with the selected configuration */
+					Timer1_init(&g_Timer1Config);
+
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0, "Door is unlocking");
+					while(OpenDoorFlag != 1);
+
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0, "Door is unlocking");
+					while(CloseDoorFlag != 1);
+
+					/*putting flags to be zero again*/
+					CloseDoorFlag=0;
+					OpenDoorFlag=0;
+
+					/* break form loop when password entered is correct */
+					break;
+				}
+				else if(validPassOrNot == WRONG_PASSWORD)
+				{
+					g_enterPassMaxTrials++;
+				}
+			}while(g_enterPassMaxTrials != 2);
+
+			/* go to step_5 (activate buzzer if password entered is incorrect for three consecutive states*/
+			if(g_enterPassMaxTrials == 2)
+			{
+				g_state= STEP_5_ACTIVATE_BUZZER;
+				/*put enter_PassMaxTrials to zero before exiting state_3 */
+				g_enterPassMaxTrials=0;
+			}
+			else
+			{
+				g_state= STEP_1_CREATE_PASSWORD;
+			}
+			break;
+
+		case STEP_4_CHANGE_PASSWORD:
+
+			do
+			{
+				/* informing Control_ECU the current step (step_4_change password)*/
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendByte(STEP_3_OPEN_DOOR);
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0, "plz enter pass:");
+
+				/* Looping to get password from user */
+				for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+				{
+					password[index]= KEYPAD_getPressedKey(); /* get pressed key from keypad */
+					_delay_ms(500); /* consider pressing a key for half-sec to be one press */
+					LCD_displayString("*"); /* display * for each number in the password */
+				}
+#if 0
+				while(1)
+				{
+					key = KEYPAD_getPressedKey();
+					_delay_ms(500);
+					if(key == '=')
+					{
+						break;
+					}
+				}
+#endif
+				/*send password to Control_ECU to check it*/
+				UART_sendByte(READY_TO_COMMUNICATE);
+				UART_sendString(password);
+
+				UART_sendByte(READY_TO_COMMUNICATE);
+				validPassOrNot= UART_receiveByte();
+
+				/* go to step1 (create new password and break form loop when password entered is correct */
+				if(validPassOrNot == RIGHT_PASSWORD)
+				{
+					g_state= STEP_1_CREATE_PASSWORD;
+					break;
+				}
+				else if(validPassOrNot == WRONG_PASSWORD)
+				{
+					g_enterPassMaxTrials++;
+				}
+
+			}while(g_enterPassMaxTrials != 2);
+
+			/* go to step_5 (activate buzzer if password entered is incorrect for three consecutive states*/
+			if(g_enterPassMaxTrials == 2)
+			{
+				g_state= STEP_5_ACTIVATE_BUZZER;
+				/*put enter_PassMaxTrials to zero before exiting state_3 */
+				g_enterPassMaxTrials=0;
+			}
+			else
+			{
+				g_state= STEP_1_CREATE_PASSWORD;
+			}
+			break;
+
+		case STEP_5_ACTIVATE_BUZZER:
+
+			/* putting state to any value to stop system form entering any state for 1 minute*/
+			g_state= NO_STATE;
+
+			/* inform Control_ECU to activate buzzer */
+			UART_sendByte(READY_TO_COMMUNICATE);
+			UART_sendByte(STEP_5_ACTIVATE_BUZZER);
+
+			/*set call back function of timer1 */
+			Timer1_setCallBack(Controling_LCD_activateBuzzerState);
+
+			/* Configure Timer1_Config variables to count 1_minute through 7 interrupts from timer1 Normal mode */
+			g_Timer1Config.initial_value=0;
+			g_Timer1Config.compare_value=58536;
+			g_Timer1Config.mode= CTC_OCR1A;
+			g_Timer1Config.prescaler= F_CPU_1024;
+
+			/* start timer1 with the selected configuration */
+			Timer1_init(&g_Timer1Config);
+
+			/* display error message */
+			LCD_clearScreen();
+			LCD_displayStringRowColumn(0,0, "Error, plz wait for 1 minute");
+			while(BuzzerOnFlag != 1);
+
+			LCD_clearScreen(); /*clear screen from error message */
+			g_state= STEP_2_MAIN_OPTIONS; /* go to main options again (step_2_ */
+			BuzzerOnFlag=0;
+		}
+	}
+}
+
+
+
+/*******************************************************************************
+ *                        Function Definitions                                 *
+ *******************************************************************************/
+
+/*
+ * Description:
+ * call back function of timer1, to control LCD while opening and closing the door
+ */
+void Controling_LCD_openDoorState (void)
+{
+
+	static uint8 timer1_tick=0;
+	timer1_tick++;
+#if 0
+	if(timer1_tick == 2)
+	{
+		LCD_clearScreen();
+
+		/* configure timer to count 3 seconds using CTC mode*/
+		g_Timer1Config.compare_value=23438;
+		Timer1_init(&g_Timer1Config);
+	}
+	else if(timer1_tick == 3)
+	{
+		/* stop displaying open door message */
+		OpenDoorFlag=1;
+
+		/* Configure Timer1_Config variables to count 15 seconds in two interrupts form CTC mode */
+		g_Timer1Config.compare_value= 58536;
+
+		/*start timer with the new configuration*/
+		Timer1_init(&g_Timer1Config);
+	}
+	else if(timer1_tick == 5)
+	{
+		/*stop displaying message locking door */
+		CloseDoorFlag=1;
+
+		/* put zero in timer1_tick to start same calculations when opening door again*/
+		timer1_tick=0;
+
+		/*stop timer1 */
+		Timer1_deInit();
+	}
+#endif
+
+	if(timer1_tick ==5)
+	{
+		/* stop displaying open door message */
+		OpenDoorFlag=1;
+	}
+	else if (timer1_tick==11)
+	{
+		CloseDoorFlag=1;
+	}
+
+}
+
+
+/*
+ * Description:
+ * call back function of timer1, to control LCD when displaying error message and activating
+ * buzzer after password entered was incorrect for 3 consecutive times
+ */
+void Controling_LCD_activateBuzzerState(void)
+{
+#if 0
+	static uint16 timer1_tick=0;
+	timer1_tick++;
+
+	if(timer1_tick==7)
+	{
+		LCD_clearScreen(); /*clear screen from error message */
+		g_state= STEP_2_MAIN_OPTIONS; /* go to main options again (step_2_ */
+		timer1_tick=0; /*put timer1_tick to be zero again */
+
+		/*stop timer1 */
+		Timer1_deInit();
+	}
+
+	timer1_tick=0; /*put timer1_tick to be zero again */
+#endif
+	BuzzerOnFlag=1;
+
+	/*stop timer1 */
+	Timer1_deInit();
+
+}
+
+#endif
+
+
+
+/*
+ ============================================================================
+ Name        : HMI_ECU
+ Data        : 10 - 6 -2022
+ Author      : Ahmed_Hossam
+ Description : security door system
+ ============================================================================
+ */
+
+#include "HMI_header.h"
+
+/*******************************************************************************
+ *                           Global Variables                                  *
+ *******************************************************************************/
+
+extern volatile uint8 open_flag;
+extern volatile uint8 stop_flag;
+extern volatile uint8 close_flag;
+extern volatile uint8 stop_buzzer;
+
+/*******************************************************************************
+ *                               HMI ECU MAIN                                  *
+ *******************************************************************************/
+
+
+int main()
+{
+	/*
+	    UART_Config.baud_rate= 9600;
+		UART_Config.bit_data = EIGHT_BIT_FRAME;
+		UART_Config.parity= DISABLE_PARITY;
+		UART_Config.stop_bit=ONE_STOP_BIT;
+	 */
+	UART_ConfigType config_UART = {EIGHT_BIT_FRAME, DISABLE_PARITY, ONE_STOP_BIT, 9600};
+
+
+	/*
+     Configure Timer1_Config variables to count 3 seconds in one interrupts from CTC mode
+	g_Timer1Config.initial_value=0;      ----> value counter starts counting from
+	g_Timer1Config.compare_value=46836;  ----> setting value of compare match register of timer1
+	g_Timer1Config.mode=CTC_OCR1A;       ----> configure timer1 to work in compare mode using channel A
+	g_Timer1Config.prescaler= F_CPU_1024;----> use prescaler of 1024
+	 */
+	Timer1_ConfigType config_Timer_Motor = {0,46875,F_CPU_64, CTC_OCR1A};
+
+
+	/* Configure Timer1_Config variables to count 1_minute through 7 interrupts from timer1 Normal mode
+	 g_Timer1Config.initial_value=0;
+     g_Timer1Config.compare_value=58536;
+	 g_Timer1Config.mode= CTC_OCR1A;
+	 g_Timer1Config.prescaler= F_CPU_1024;
+	 */
+	Timer1_ConfigType config_Timer_Buzzer = {0,58536,F_CPU_1024,CTC_OCR1A};
+
+	uint8 state = SETTING_NEW_PASSWORD;
+	uint8 passwordsMatchFlag = WRONG_PASS;
+	uint8 g_enterPassMaxTrials = 0;
+
+
+	/*enable lcd driver*/
+	LCD_init();
+
+	/*enable UART driver*/
+	UART_init(&config_UART);
+
+	/*Enable global interrupt*/
+	sei();
+
+	while(1)
+	{
+		/* setting a password for the system or user requires changing password*/
+		while((state == SETTING_NEW_PASSWORD) && (passwordsMatchFlag == WRONG_PASS))
+		{
+			/* entering two passwords and sending them to Control_ECU*/
+			HMI_settingNewPassword();
+
+			UART_sendByte(READY_TO_COMMUNICATE); /* informing Conrol_ECU to send data now*/
+			passwordsMatchFlag=UART_receiveByte(); /* receive flag indicating if two passwords matched*/
+
+			LCD_clearScreen();
+			if(passwordsMatchFlag == MATCH)
+			{
+				/*Do Nothing*/
+			}
+			else
+			{
+				LCD_displayStringRowColumn(0,0, "Not matching");
+				state = SETTING_NEW_PASSWORD;
+				passwordsMatchFlag = WRONG_PASS;
+				_delay_ms(500);
+			}
+
+		}
+
+		/*After setting the new password the main menu starts to display
+		 * press + --> the door will open for 15, stop for 3 sec and then close for 15 sec
+		 * press - --> Change password
+		 */
+		state = HMI_mainOptions();
+
+		if(state == STEP_2_OPEN_DOOR)
+		{
+			while(1)
+			{
+				passwordsMatchFlag = HMI_getPassword();
+				if(passwordsMatchFlag == MATCH)
+				{
+					/* start timer1 with the selected configuration */
+					Timer1_init(&config_Timer_Motor);
+
+					/*set call back function of timer1 */
+					Timer1_setCallBack(Controling_LCD_openDoorState);
+
+					g_enterPassMaxTrials = 0;
+
+					//				UART_sendByte(MATCH);
+
+
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0,"Door is opening ");
+					while(open_flag != 1);
+
+					//				stop_flag=0;
+					LCD_displayStringRowColumn(0,0,"Door not moving");
+					while(stop_flag != 1);
+
+
+					//				close_flag = 0;
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0,"Door is closing");
+					while(close_flag != 1);
+
+					/*stop timer1 */
+					Timer1_deInit();
+
+					/* clear door controlling flags */
+					open_flag = 0;
+					close_flag = 0;
+					stop_flag=0;
+					break; /* break from loop after entering password correctly and opening door*/
+
+				}
+				else if (passwordsMatchFlag == NOT_MATCHING)
+				{
+					g_enterPassMaxTrials++;
+					if(g_enterPassMaxTrials >= 3)
+					{
+
+						Timer1_setCallBack(HMI_buzzerProcessing);
+						Timer1_init(&config_Timer_Buzzer);
+
+						/*display error message*/
+						LCD_clearScreen();
+						LCD_displayStringRowColumn(0,0,"ERROR, please");
+						LCD_displayStringRowColumn(1,0,"wait 1 min");
+						while(stop_buzzer != 1);
+
+
+						Timer1_deInit(); /*stop timer*/
+						stop_buzzer = 0;
+						break; /* break from the loop after setting alarm for 1 minute to go to main options again*/
+					}
+					else
+					{
+						LCD_displayStringRowColumn(0,0, "Incorrect Pass");
+
+						/*start communication with Control_ECU, to take password and check it from user again*/
+						UART_sendByte(READY_TO_COMMUNICATE);
+						UART_sendByte(STEP_2_OPEN_DOOR);
+
+						_delay_ms(500);
+					}
+				}
+			}
+		}
+		else if (state == STEP_3_CHANGE_PASS)
+		{
+			while(1)
+			{
+				passwordsMatchFlag = HMI_getPassword();
+				if(passwordsMatchFlag == MATCH)
+				{
+					/* clear g_enterPassMaxTrials (counter of consecutive wrong passwords)*/
+					g_enterPassMaxTrials = 0;
+
+					/* configure state and passwordsMatchFlag variable to go to step_1 */
+					state = SETTING_NEW_PASSWORD;
+					passwordsMatchFlag = WRONG_PASS;
+					break;
+				}
+				else if (passwordsMatchFlag == NOT_MATCHING)
+				{
+					g_enterPassMaxTrials++;
+
+					if(g_enterPassMaxTrials >= 3)
+					{
+						Timer1_setCallBack(HMI_buzzerProcessing);
+						Timer1_init(&config_Timer_Buzzer);
+
+						/* display error message for 1 minute*/
+						LCD_clearScreen();
+						LCD_displayStringRowColumn(0,0,"ERROR, please");
+						LCD_displayStringRowColumn(1,0,"wait 1 min");
+						while(stop_buzzer != 1);
+
+						LCD_clearScreen();
+
+						Timer1_deInit();  /* stop timer*/
+						stop_buzzer = 0;  /* clear buzzer flag*/
+						break; /* break from the loop after setting alarm for 1 minute to go to main options again*/
+					}
+					else
+					{
+						LCD_displayStringRowColumn(0,0, "Incorrect Pass");
+
+						/*start communication with Control_ECU, to take password and check it from user again*/
+						UART_sendByte(READY_TO_COMMUNICATE);
+						UART_sendByte(STEP_3_CHANGE_PASS);
+
+						_delay_ms(500);
+					}
+				}
+			}
+		}
+
+	}
+}
+
+
+/*HMI_ECU*/

@@ -1,0 +1,267 @@
+/*
+ * File: HMI_ECU.c
+ * Description: source file for HMI_ECU application
+ * Author: SHAHD MOHAMED
+ */
+
+#include "HMI_header.h"
+
+/*******************************************************************************
+ *                           Global Variables                                  *
+ *******************************************************************************/
+extern volatile uint8 open_flag;
+extern volatile uint8 stop_flag;
+extern volatile uint8 close_flag;
+extern volatile uint8 stop_buzzer;
+
+/*******************************************************************************
+ *                               HMI ECU MAIN                                  *
+ *******************************************************************************/
+int main()
+{
+
+	/**********************************Local Variables**************************/
+	uint8 state = SETTING_NEW_PASSWORD; /* variable to carry which state to work in*/
+
+	/*variable to carry whether input password matches system password or not in step_3(open door)and step_4 (change password)
+	 * and to carry whether confirmation password matches new password in step_1(set new password)
+	 */
+	uint8 passwordsMatchFlag = WRONG_PASS;
+
+	/* variable to count number of consecutive incorrect passwords,
+	 * if user enter wrong password for 3 timer straight Alarm should be set for 1 minute
+	 */
+	uint8 g_enterPassMaxTrials = 0;
+
+	/******************************Dynamic Configurations**************************/
+
+	/*  Configuration of UART driver:
+	 *UART_Config.baud_rate= 9600;
+	 *UART_Config.bit_data = EIGHT_BIT_FRAME;
+	 *UART_Config.parity= DISABLE_PARITY;
+	 *UART_Config.stop_bit=ONE_STOP_BIT;
+	 */
+	UART_ConfigType config_UART = {EIGHT_BIT_FRAME, DISABLE_PARITY, ONE_STOP_BIT, 9600};
+
+
+	/*
+	 * Configure Timer1_Config_Motor variables to count 3 seconds every interrupt:
+	 *g_Timer1Config.initial_value=0;     ---> initial number to count from
+	 *g_Timer1Config.compare_value=46875; ----> value of output compare register
+	 *g_Timer1Config.mode=CTC_OCR1A;      ---> working in CTC mode using channel A
+	 *g_Timer1Config.prescaler= F_CPU_64; ----> prescaler 64 is used
+	 */
+	Timer1_ConfigType Timer1_Config_Motor = {0,46875,F_CPU_64, CTC_OCR1A};
+
+
+	/* Configure Timer1_Config_Buzzer variables to count 1_minute through 7 interrupts from timer1 Normal mode
+	 g_Timer1Config.initial_value=0;      ---> initial number to count from
+     g_Timer1Config.compare_value=58536;  ----> value of output compare register
+	 g_Timer1Config.mode= CTC_OCR1A;      ---> working in CTC mode using channel A
+	 g_Timer1Config.prescaler= F_CPU_1024;----> prescaler 1024 is used
+	 */
+	Timer1_ConfigType Timer1_Config_Buzzer = {0,58536,F_CPU_1024,CTC_OCR1A};
+
+	/*enable lcd driver*/
+	LCD_init();
+
+	/*enable UART driver*/
+	UART_init(&config_UART);
+
+	/*Enable global interrupt*/
+	sei();
+
+	while(1)
+	{
+		/* setting a password for the system when used for first time or user requires changing password*/
+		do
+		{
+			/* entering two passwords and sending them to Control_ECU*/
+			HMI_settingNewPassword();
+
+			UART_sendByte(READY_TO_COMMUNICATE); /* informing Conrol_ECU to send data now*/
+			passwordsMatchFlag=UART_receiveByte(); /* receive flag indicating if two passwords matched*/
+
+			LCD_clearScreen();
+			if(passwordsMatchFlag == MATCH)
+			{
+				/*Do Nothing*/
+			}
+			else
+			{
+				LCD_displayStringRowColumn(0,0, "Not matching");
+				state = SETTING_NEW_PASSWORD;
+				passwordsMatchFlag = WRONG_PASS;
+				_delay_ms(500);
+			}
+
+		}while((state == SETTING_NEW_PASSWORD) && (passwordsMatchFlag == WRONG_PASS));
+
+		/*After setting the new password the main menu starts to display
+		 * In case of press + --> the door will open for 15, stop for 3 sec and then close for 15 sec
+		 * In case of press - --> Change password
+		 * In case of the password is wrong for 3 times --> Turn on buzzer for 1-minute
+		 *  */
+		//		LCD_clearScreen();
+		//		LCD_displayStringRowColumn(0, 0, "+: Open Door");
+		//		LCD_displayStringRowColumn(1, 0, "-: Change Pass");
+
+		/* get input form user*/
+		state = HMI_mainOptions();
+
+		if(state == STEP_2_OPEN_DOOR)
+		{
+			passwordsMatchFlag = HMI_getPassword();
+			if(passwordsMatchFlag == MATCH)
+			{
+				/* start timer1 with the selected configuration */
+				Timer1_init(&Timer1_Config_Motor);
+
+				/*set call back function of timer1 */
+				Timer1_setCallBack(Controling_LCD_openDoorState);
+
+				g_enterPassMaxTrials = 0;
+
+				//				UART_sendByte(MATCH);
+
+
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0,"Door is opening ");
+				while(open_flag != 1);
+
+				//				stop_flag=0;
+				LCD_displayStringRowColumn(0,0,"Door not moving");
+				while(stop_flag != 1);
+
+
+				//				close_flag = 0;
+				LCD_clearScreen();
+				LCD_displayStringRowColumn(0,0,"Door is closing");
+				while(close_flag != 1);
+
+				/*stop timer1 */
+				Timer1_deInit();
+
+				/* clear door controlling flags */
+				open_flag = 0;
+				close_flag = 0;
+				stop_flag=0;
+
+			}
+			else if (passwordsMatchFlag == NOT_MATCHING)
+			{
+				g_enterPassMaxTrials++;
+				if(g_enterPassMaxTrials >= 3)
+				{
+#if 0
+					Timer1_setCallBack(HMI_buzzerProcessing);
+					Timer1_init(&Timer1_Config_Buzzer);
+
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0,"ERROR, please");
+					LCD_displayStringRowColumn(1,0,"wait 1 min");
+					while(stop_buzzer != 1);
+					LCD_clearScreen();
+
+
+					//					state = NOT_INITIAL;
+
+					//					HMI_step5_error();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+					state = STEP_2_OPEN_DOOR;
+#endif
+					Timer1_setCallBack(HMI_buzzerProcessing);
+					Timer1_init(&Timer1_Config_Buzzer);
+
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0,"ERROR, please");
+					LCD_displayStringRowColumn(1,0,"wait 1 min");
+					while(stop_buzzer != 1);
+
+					LCD_clearScreen();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+				}
+				else
+				{
+					LCD_displayStringRowColumn(0,0, "Incorrect Pass");
+					_delay_ms(500);
+				}
+			}
+		}
+		else if (state == STEP_3_CHANGE_PASS)
+		{
+			passwordsMatchFlag = HMI_getPassword();
+			if(passwordsMatchFlag == MATCH)
+			{
+				/* clear g_enterPassMaxTrials (counter of consecutive wrong passwords)*/
+				g_enterPassMaxTrials = 0;
+
+				/* configure state and passwordsMatchFlag variable to go to step_1 */
+				state = SETTING_NEW_PASSWORD;
+				passwordsMatchFlag = WRONG_PASS;
+			}
+			else if (passwordsMatchFlag == NOT_MATCHING)
+			{
+				g_enterPassMaxTrials++;
+
+				if(g_enterPassMaxTrials >= 3)
+				{
+					Timer1_setCallBack(HMI_buzzerProcessing);
+					Timer1_init(&Timer1_Config_Buzzer);
+
+					/* display error message for 1 minute*/
+					LCD_clearScreen();
+					LCD_displayStringRowColumn(0,0,"ERROR, please");
+					LCD_displayStringRowColumn(1,0,"wait 1 min");
+					while(stop_buzzer != 1);
+
+					LCD_clearScreen();
+
+					//					state = NOT_INITIAL;
+
+					//					HMI_step5_error();
+
+					Timer1_deInit();  /* stop timer*/
+					stop_buzzer = 0;  /* clear buzzer flag*/
+					state = STEP_2_OPEN_DOOR; /* go to step 2*/
+				}
+				else
+				{
+					/* display message to indicate entered  password is wrong*/
+					LCD_displayStringRowColumn(0,0, "Incorrect Pass");
+					_delay_ms(500);
+				}
+			}
+#if 0
+			else
+			{
+				LCD_displayStringRowColumn(0,0, "Incorrect Password");
+				_delay_ms(500);
+			}
+#endif
+
+		}
+#if 0
+		else if(state == NOT_INITIAL)
+		{
+			LCD_clearScreen();
+			LCD_displayStringRowColumn(0,0,"In valid input");
+			for (cnt = 128000; cnt; cnt--);
+			state = NOT_INITIAL;
+		}
+#endif
+		else
+		{
+			/* go to step_1 (setting new password) */
+			state = SETTING_NEW_PASSWORD;
+			passwordsMatchFlag = WRONG_PASS;
+		}
+	}
+}
+
+
+/*HMI_ECU*/

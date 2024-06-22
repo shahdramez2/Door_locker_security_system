@@ -1,0 +1,160 @@
+#include "Control_header.h"
+#include <util/delay.h>
+#include <string.h>
+
+/*******************************************************************************
+ *                           Global Variables                                  *
+ *******************************************************************************/
+
+//volatile uint16 g_tick = 0;
+//volatile uint8 open_flag = 0;
+//volatile uint8 CloseDoorFlag = 0;
+//volatile uint8 stop_flag = 0;
+volatile uint8 stop_buzzer = 0;
+volatile uint8 motorState =0;
+
+
+/*******************************************************************************
+ *                      Functions Definition                                   *
+ *******************************************************************************/
+
+/*
+ * Description:
+ * Function to store the password in EEPROM
+ */
+static void storePassword(uint8 *pass_ptr)
+{
+	uint8 index;
+
+	for(index = 0; index<PASSWORD_SIZE;index++)
+	{
+		EEPROM_writeByte(index,pass_ptr[index]);
+		_delay_ms(30);
+	}
+
+}
+
+/*
+ * Description:
+ * 	  1- Receive the new password.
+ * 	  2- Receive the confirmation password.
+ * 	  3- Compare between them.
+ * 	  4- In case of the two passwords are not matched return not MATCH.
+ * 	  5- In case of the two passwords are matched return WRONG_PASS.
+ * */
+uint8 CONTORL_step1SetNewPass(void)
+{
+	uint8 password[PASSWORD_SIZE+1]; /* string to receive password*/
+	uint8 confirmation_password[PASSWORD_SIZE+1];
+	uint8 password_MatchingFlag; /* flag to check if two passwords sent match or not*/
+
+	while(UART_receiveByte() != READY_TO_COMMUNICATE){};
+	UART_receiveString(password);
+
+	while(UART_receiveByte() != READY_TO_COMMUNICATE){};
+	UART_receiveString(confirmation_password);
+
+	password_MatchingFlag = strcmp(password, confirmation_password);
+
+	if (password_MatchingFlag == 0)
+	{
+		/* store password in EEPROM */
+		storePassword(confirmation_password);
+
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		UART_sendByte(MATCH);
+		return MATCH;
+	}
+	else
+	{
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		UART_sendByte(WRONG_PASS);
+		return WRONG_PASS;
+	}
+}
+
+/*
+ * Description:
+ * 	  1- Receive the entered password.
+ * 	  2- Get the stored password.
+ * 	  3- Compare between them.
+ * 	  4- In case of the two passwords are not matched return NOT_MATCHING.
+ * 	  5- In case of the two passwords are matched return match.
+ * */
+uint8 CONTROL_checkPassword(void)
+{
+	uint8 index;
+	uint8 isMatching;
+	uint8 dump_variable; /* a dumb variable to receive */
+
+	uint8 enteredPassword[PASSWORD_SIZE+1];
+	uint8 storedPassword[PASSWORD_SIZE+1];
+
+	while(UART_receiveByte() != READY_TO_COMMUNICATE);
+	UART_receiveString(enteredPassword);
+
+	for(index = 0; index < PASSWORD_SIZE; index++ )
+	{
+		dump_variable = EEPROM_readByte(index,&storedPassword[index]);
+	}
+
+	storedPassword[index] = '\0';
+
+	isMatching = strcmp(enteredPassword, storedPassword);
+
+	if(isMatching == 0)
+	{
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		UART_sendByte(MATCH);
+		return MATCH;
+	}
+	else
+	{
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		UART_sendByte(NOT_MATCHING);
+		return NOT_MATCHING;
+	}
+}
+
+
+/*
+ * Description:
+ * call back function of timer1, to control motor while opening and closing the door
+ */
+void CONTROL_motorConrolling (void)
+{
+
+	static uint8 timer1_tick=0;
+	timer1_tick++;
+
+	if(timer1_tick == 40)
+	{
+		motorState= STOP_MOTOR;
+	}
+	else if(timer1_tick == 48)
+	{
+		motorState = ROTATE_MOTOR_A_CW;
+	}
+	else if(timer1_tick == 88 )
+	{
+		motorState= STOP_MOTOR;
+		timer1_tick=0;
+	}
+}
+
+
+/*
+ * Description:
+ * Function to set stop_buzzer after to turn off buzzer
+ * after 1 minute from turning it on
+ */
+void CONTROL_buzzerProcessing(void)
+{
+	static timer1_tick_buzzer =0;
+	timer1_tick_buzzer++;
+	if(timer1_tick_buzzer==56)
+	{
+		stop_buzzer=1;
+		timer1_tick_buzzer=0;
+	}
+}

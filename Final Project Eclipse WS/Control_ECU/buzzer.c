@@ -1,0 +1,51 @@
+/*
+ * buzzer.c
+ *
+ *  Created on: Nov 1, 2022
+ *      Author: SHAHD MOHAMED
+ */
+
+#include"buzzer.h"
+#include"gpio.h"
+
+
+/*******************************************************************************
+ *                      Functions Definitions                                  *
+ *******************************************************************************/
+
+/*
+ * Description:
+ * Function to initiate buzzer drive:
+ * Setup the direction for the buzzer pin as output pin through the GPIO driver
+ * Turn off the buzzer through the GPIO.
+ */
+void Buzzer_init(void)
+{
+	/* setup buzzer Pin to be output throught GPIO Driver */
+	GPIO_setupPinDirection(BUZZER_PORT_ID, BUZZER_PIN_ID, PIN_OUTPUT);
+
+	/*Turn off buzzer through GPIO */
+	GPIO_writePin(BUZZER_PORT_ID, BUZZER_PIN_ID, LOGIC_LOW);
+}
+
+
+/*
+ * Description:
+ * Function to enable the Buzzer through the GPIO.
+ */
+void Buzzer_on(void)
+{
+	/*Turn ON buzzer through GPIO */
+	GPIO_writePin(BUZZER_PORT_ID, BUZZER_PIN_ID, LOGIC_HIGH);
+}
+
+
+/*
+ * Description:
+ * Function to disable the Buzzer through the GPIO.
+ */
+void Buzzer_off(void)
+{
+	/*Turn off buzzer through GPIO */
+	GPIO_writePin(BUZZER_PORT_ID, BUZZER_PIN_ID, LOGIC_LOW);
+}

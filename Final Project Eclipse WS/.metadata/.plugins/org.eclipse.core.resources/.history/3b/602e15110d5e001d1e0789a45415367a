@@ -1,0 +1,493 @@
+/*
+ * HMI_ECU.c
+ *
+ *  Created on: Nov 1, 2022
+ *      Author: SHAHD MOHAMED
+ */
+
+#if 0
+
+#include"std_types.h"
+#include"gpio.h"
+#include"common_macros.h"
+#include"dc_motor.h"
+#include"external_eeprom.h"
+#include"buzzer.h"
+#include"timer1.h"
+#include"uart.h"
+#include"twi.h"
+#include<avr/io.h>
+#include<string.h>
+
+/*******************************************************************************
+ *                                Definitions                                  *
+ *******************************************************************************/
+#define PASS_DIGITS_NUM                  3  /* num of digits per password */
+#define Invalid_PassCreationProcess      0  /* macro sent to HMI_ECU if two passwords don't match*/
+#define valid_PassCreationProcess        1  /* macro sent to HMI_ECU if two passwords match*/
+#define PASSOWRD_ADDRESS                 0x0300 /* address of password in eeprom */
+
+#define STEP_1_CREATE_PASSWORD           1
+#define STEP_2_MAIN_OPTIONS              2
+#define STEP_3_OPEN_DOOR                 3
+#define STEP_4_CHANGE_PASSWORD           4
+#define STEP_5_ACTIVATE_BUZZER           5
+
+#define RIGHT_PASSWORD                   1
+#define WRONG_PASSWORD                   0
+
+#define CONTROL_ECU_READY                0x10
+#define READY_TO_COMMUNICATE                            0x11
+/*******************************************************************************
+ *                                Global Variables                             *
+ *******************************************************************************/
+Timer1_ConfigType g_Timer1Config;
+TWI_ConfigType g_TWI_Config = {0x64, FAST_MODE};
+
+volatile uint8 motorRotateFlag=0;
+
+/*
+ * Description:
+ * Call back function of timer1 when password entered is incorrect for three consecutive times
+ */
+void Control_Buzzer(void);
+
+
+/*
+ * Description:
+ * call back function of Timer1
+ */
+void Control_DcMotor(void);
+
+
+/*******************************************************************************
+ *                               main function                                 *
+ *******************************************************************************/
+int main(void)
+{
+	uint8 password[PASS_DIGITS_NUM]; /*array to hold password entered form user */
+
+	/* array to hold the re-entered password when creating new password*/
+	uint8 check_password[PASS_DIGITS_NUM];
+
+	/* putting # to indicate the end of each string when using UART driver */
+	password[PASS_DIGITS_NUM-1] = '#';
+	check_password[PASS_DIGITS_NUM-1]= '#';
+
+	uint8 index; /* index for looping on the password digits*/
+
+	uint8 password_matched_flag;
+
+	uint8 step_num; /* variable to hold which step HMI_ECU is working in */
+
+	/* Enable global interrupt flag*/
+	SET_BIT(SREG, PIN7_ID);
+
+	/*Configure UART driver with desired settings */
+	UART_Config.baud_rate= 9600;
+	UART_Config.bit_data = EIGHT_BIT_FRAME;
+	UART_Config.parity= DISABLE_PARITY;
+	UART_Config.stop_bit= ONE_STOP_BIT;
+
+	UART_init(&UART_Config); /*enable UART driver */
+	TWI_init(&g_TWI_Config); /* enable I2C driver */
+	DcMotor_Init(); /* enable dc_motor driver */
+	Buzzer_init(); /*enable buzzer driver */
+
+
+	while(1)
+	{
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		step_num = UART_receiveByte(); /* receive form HMI_ECU which state we're working in */
+
+		switch(step_num)
+		{
+		case STEP_1_CREATE_PASSWORD:
+
+			while(UART_receiveByte() != READY_TO_COMMUNICATE);
+			UART_receiveString(password);
+
+			while(UART_receiveByte() != READY_TO_COMMUNICATE);
+			UART_receiveString(check_password);
+
+
+			password_matched_flag= strcmp(password,check_password);
+
+
+			if(password_matched_flag == 0)
+			{
+
+				/*store password in EEPROM */
+				for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+				{
+					EEPROM_writeByte(PASSOWRD_ADDRESS+index,password[index]);
+				}
+
+				/*tell HMI_ECU to repeat step 1 again (i.e ask user to create another password */
+				while(UART_receiveByte() != READY_TO_COMMUNICATE);
+				UART_sendByte(valid_PassCreationProcess);
+			}
+			else
+			{
+				/* tell HMI_ECU to go to step 2*/
+				while(UART_receiveByte() != READY_TO_COMMUNICATE);
+				UART_sendByte(Invalid_PassCreationProcess);
+			}
+			break;
+			/************************************************************************************/
+		case STEP_3_OPEN_DOOR:
+			/*receive password from HMI_ECU */
+			while(UART_receiveByte() != READY_TO_COMMUNICATE);
+			UART_receiveString(password);
+			char check;
+			/*read password from EEPROM*/
+			for(index=0; index<PASS_DIGITS_NUM-2 ; index++)
+			{
+				check= EEPROM_readByte(PASSOWRD_ADDRESS+index,&check_password[index]);
+			}
+
+			password_matched_flag= strcmp(password, check_password);
+
+			UART_sendByte(READY_TO_COMMUNICATE);
+
+			/*checking if password entered is correct or not */
+			if(password_matched_flag != 0)
+			{
+				while(UART_receiveByte() != READY_TO_COMMUNICATE);
+				UART_sendByte(WRONG_PASSWORD);
+			}
+			else if(password_matched_flag)
+			{
+				while(UART_receiveByte() != READY_TO_COMMUNICATE);
+				UART_sendByte(RIGHT_PASSWORD);
+
+				/*Configure call back function of timer1 */
+				Timer1_setCallBack(Control_DcMotor);
+
+				/* Configure Timer1_Config variables to count 15 seconds in two interrupts form CTC mode */
+				g_Timer1Config.initial_value=0;
+				g_Timer1Config.compare_value=58536;
+				g_Timer1Config.mode=CTC_OCR1A;
+				g_Timer1Config.prescaler=F_CPU_1024;
+
+				/* start timer1 */
+				Timer1_init(&g_Timer1Config);
+
+				while(motorRotateFlag != 1);
+				motorRotateFlag=0;
+			}
+			break;
+			/************************************************************************************/
+		case STEP_4_CHANGE_PASSWORD:
+			password_matched_flag=TRUE;
+
+			/*receive password from HMI_ECU */
+			while(UART_receiveByte != READY_TO_COMMUNICATE);
+			UART_receiveString(password);
+
+			/*read password from EEPROM*/
+			for(index=0; index<PASS_DIGITS_NUM-1; index++)
+			{
+				EEPROM_readByte(PASSOWRD_ADDRESS+index,&check_password[index]);
+			}
+
+			/*check password sent with one saved in EEPROM */
+			for(index=0; index<PASS_DIGITS_NUM-1; index++)
+			{
+				if(password[index] != check_password[index])
+				{
+					password_matched_flag=FALSE;
+					break;
+				}
+			}
+
+			/*checking if password entered is correct or not */
+			if(password_matched_flag == FALSE)
+			{
+				/* inform HMI_ECU the entered password is not correct*/
+				UART_sendByte(WRONG_PASSWORD);
+			}
+			else if(password_matched_flag == TRUE)
+			{
+				/* inform HMI_ECU the entered password is correct*/
+				UART_sendByte(RIGHT_PASSWORD);
+
+				/* go to step_1 (create new password) */
+				step_num = STEP_1_CREATE_PASSWORD;
+				break;
+				/************************************************************************************/
+		case STEP_5_ACTIVATE_BUZZER:
+
+			/* turn buzzer on to indicate an error for 1 minute*/
+			Buzzer_on();
+
+			/*set call back function of timer1 */
+			Timer1_setCallBack(Control_Buzzer);
+
+			/* Configure Timer1_Config variables to count 1_minute through 7 interrupts from timer1 Normal mode */
+			g_Timer1Config.initial_value=0;
+			g_Timer1Config.mode= NORMAL;
+			g_Timer1Config.prescaler= F_CPU_1024;
+
+			/* start timer1 with the selected configuration */
+			Timer1_init(&g_Timer1Config);
+
+			}
+		}
+	}
+}
+
+/*******************************************************************************
+ *                             Functions Definitions                           *
+ *******************************************************************************/
+/*
+ * Description:
+ * call back function of Timer1
+ */
+void Control_DcMotor(void)
+{
+	static uint8 timer1_tick=0;
+	timer1_tick++;
+	if(timer1_tick==1)
+	{
+		/* rotate motor with its full speed CW for 15 seconds*/
+		DcMotor_Rotate(CW, MAX_MOTOR_SPEED);
+	}
+	else if(timer1_tick == 2)
+	{
+		/* stop Dc Motor for 3 seconds */
+		DcMotor_Rotate(STOP, ZERO_SPEED);
+		/* configure timer to count 3 seconds using CTC mode*/
+		g_Timer1Config.compare_value=23438;
+		Timer1_init(&g_Timer1Config);
+	}
+	else if(timer1_tick == 3)
+	{
+		/* make motor rotate A_CW for another 15 seconds */
+		DcMotor_Rotate(A_CW, MAX_MOTOR_SPEED);
+
+		/* Configure Timer1_Config variables to count 15 seconds in two interrupts form CTC mode */
+		g_Timer1Config.compare_value= 58536;
+
+		/*start timer with the new configuration*/
+		Timer1_init(&g_Timer1Config);
+	}
+	else if(timer1_tick == 5)
+	{
+		/* stop motor after receiving two interrupts */
+		DcMotor_Rotate(STOP, ZERO_SPEED);
+
+		motorRotateFlag=0;
+
+		/* put zero in timer1_tick to start same calculations when opening door again*/
+		timer1_tick=0;
+	}
+}
+
+/*
+ * Description:
+ * Call back function of timer1 when password entered is incorrect for three consecutive times
+ */
+void Control_Buzzer(void)
+{
+	static uint8 timer1_tick=0;
+	timer1_tick++;
+	if(timer1_tick == 7)
+	{
+		/*turn off buzzer after 1 minute */
+		Buzzer_off();
+
+		/*put timer1_tick to be zero again*/
+		timer1_tick=0;
+
+		/*stop timer1 */
+		Timer1_deInit();
+	}
+
+}
+#endif
+
+/*
+		Author      : Shahd Mohamed
+		Description : Security Door-Lock System
+		============================================================================
+ */
+
+#include "Control_header.h"
+#include"uart.h"
+#include"timer1.h"
+#include"dc_motor.h"
+
+/*******************************************************************************
+ *                           Global Variables                                  *
+ *******************************************************************************/
+
+//extern volatile uint8 OpenDoorFlag;
+//extern volatile uint8 CloseDoorFlag;
+//extern volatile uint8 stop_flag;
+extern volatile uint8 stop_buzzer;
+extern volatile uint8 motorState;
+
+/*******************************************************************************
+ *                               CONTROL ECU MAIN                              *
+ *******************************************************************************/
+
+int main()
+{
+
+	/*
+	    UART_Config.baud_rate= 9600;
+		UART_Config.bit_data = EIGHT_BIT_FRAME;
+		UART_Config.parity= DISABLE_PARITY;
+		UART_Config.stop_bit=ONE_STOP_BIT;
+	 */
+	UART_ConfigType config_UART = {EIGHT_BIT_FRAME, DISABLE_PARITY, ONE_STOP_BIT, 9600};
+
+	/* Configure Timer1_Config variables to count 15 seconds in two interrupts form CTC mode
+		g_Timer1Config.initial_value=0;
+		g_Timer1Config.compare_value=46836;
+		g_Timer1Config.mode=CTC_OCR1A;
+		g_Timer1Config.prescaler= F_CPU_1024;
+	 */
+	Timer1_ConfigType config_Timer_Motor = {0,46875,F_CPU_64, CTC_OCR1A}; // counts 3 sec every interrupt
+
+
+	/* Configure Timer1_Config variables to count 1_minute through 7 interrupts from timer1 Normal mode
+		 g_Timer1Config.initial_value=0;
+	     g_Timer1Config.compare_value=58536;
+		 g_Timer1Config.mode= CTC_OCR1A;
+		 g_Timer1Config.prescaler= F_CPU_1024;
+	 */
+	Timer1_ConfigType config_Timer_Buzzer = {0,58536,F_CPU_1024,CTC_OCR1A};
+
+	/* Configuration of EEPROM:
+	 * 1- Insert the address of the slave device.
+	 * Insert the bit rate
+	 * */
+	TWI_ConfigType g_TWI_Config = {0x64, FAST_MODE};
+
+	uint8 state = SETTING_NEW_PASSWORD;
+	uint8 check = WRONG_PASS;
+	uint8 g_enterPassMaxTrials = 0;
+
+	UART_init(&config_UART); /*enable UART driver */
+	TWI_init(&g_TWI_Config); /* enable I2C driver */
+	DcMotor_Init(); /* enable dc_motor driver */
+	Buzzer_init(); /*enable buzzer driver */
+
+	/*Enable general interrupt*/
+	sei();
+
+	while(1)
+	{
+		/*In case of the system works in the first time or the user wants
+		 * to change the password*/
+		while((state == SETTING_NEW_PASSWORD) && (check == WRONG_PASS))
+		{
+
+			check = CONTORL_step1SetNewPass();
+		}
+
+		/*When HMI_ECU sends Ready, CONTROL_ECU will start to receive open the door or change password
+		 * In case of the password is wrong for 3 times --> Alarm will turn on for 1 minute
+		 * */
+		while(UART_receiveByte() != READY_TO_COMMUNICATE);
+		state = UART_receiveByte();
+
+		if(state == STEP_2_OPEN_DOOR)
+		{
+			check = CONTROL_checkPassword();
+
+			if(check == MATCH)
+			{
+				g_enterPassMaxTrials = 0;
+
+				Timer1_setCallBack(CONTROL_motorConrolling);
+				Timer1_init(&config_Timer_Motor);
+
+
+				//				CONTROL_motorOpen();
+
+				motorState = ROTATE_MOTOR_CW;
+
+				/* make motor rotate CW for another 15 seconds */
+				DcMotor_Rotate(CW, MAX_MOTOR_SPEED);
+				while(motorState == ROTATE_MOTOR_CW);
+
+				//				CloseDoorFlag = 0;
+				//				CONTROL_motorClose();
+
+				/* stop motor after receiving two interrupts */
+				DcMotor_Rotate(STOP, ZERO_SPEED);
+				while(motorState == STOP_MOTOR);
+
+				/* make motor rotate A_CW for another 15 seconds */
+				DcMotor_Rotate(A_CW, MAX_MOTOR_SPEED);
+				while(motorState == ROTATE_MOTOR_A_CW);
+
+				/* stop motor*/
+				DcMotor_Rotate(STOP, ZERO_SPEED);
+
+				//				stop_flag = 0;
+				//				CONTROL_motorStop();
+
+				//				OpenDoorFlag = 0;
+				//				CloseDoorFlag = 0;
+				//				stop_flag = 0;
+
+				Timer1_deInit();
+			}
+			if (check == NOT_MATCHING)
+			{
+				g_enterPassMaxTrials++;
+				if(g_enterPassMaxTrials >= 3)
+				{
+					Timer1_setCallBack(CONTROL_buzzerProcessing);
+					Timer1_init(&config_Timer_Buzzer);
+
+					Buzzer_on();
+					while(stop_buzzer != 1);
+					Buzzer_off();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+				}
+			}
+		}
+		else if (state == STEP_3_CHANGE_PASS)
+		{
+			check = CONTROL_checkPassword();
+			if(check == MATCH)
+			{
+				g_enterPassMaxTrials = 0;
+				state = SETTING_NEW_PASSWORD;
+				check = WRONG_PASS;
+			}
+			else if (check == NOT_MATCHING)
+			{
+
+				g_enterPassMaxTrials++;
+				if(g_enterPassMaxTrials >= 3)
+				{
+					Timer1_setCallBack(CONTROL_buzzerProcessing);
+					Timer1_init(&config_Timer_Buzzer);
+
+					Buzzer_on();
+					while(stop_buzzer != 1);
+					Buzzer_off();
+
+					Timer1_deInit();
+					stop_buzzer = 0;
+				}
+			}
+		}
+		else
+		{
+			state = SETTING_NEW_PASSWORD;
+			check = WRONG_PASS;
+		}
+	}
+}
+
+
+/*Control ECU*/

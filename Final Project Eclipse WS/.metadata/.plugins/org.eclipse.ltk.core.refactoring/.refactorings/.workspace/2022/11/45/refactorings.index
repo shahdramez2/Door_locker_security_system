@@ -1,0 +1,7 @@
+1667276053224	Rename resource 'HMI_ECU'
+1667276081932	Rename resource 'Control_ECU'
+1667276098533	Rename resource 'HMIi_ECU'
+1667316254333	Delete resource 'HMI_ECU/uart.c'
+1667316260824	Delete resource 'HMI_ECU/uart.h'
+1667317286369	Delete 3 resources
+1667317839801	Delete resource 'HMI_ECU/uart.h'
